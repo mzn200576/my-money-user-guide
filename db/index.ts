@@ -45,7 +45,14 @@ async function requestDatabase(path: string, options: { method?: string; body?: 
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new DatabaseError("SUPABASE_URL과 SUPABASE_SECRET_KEY를 설정해주세요.", 503);
-  const endpoint = new URL(`${url.replace(/\/$/, "")}/rest/v1/${path}`);
+  // The Supabase setting may be a project URL or a copied Data API URL.
+  // Resolve from the origin so /rest/v1 is added exactly once.
+  let endpoint: URL;
+  try {
+    endpoint = new URL(`/rest/v1/${path}`, url.trim());
+  } catch {
+    throw new DatabaseError("SUPABASE_URL 설정이 올바른 주소가 아닙니다.", 503);
+  }
   if (options.query) endpoint.search = options.query.toString();
   const headers: Record<string, string> = {
     apikey: key, "Content-Type": "application/json",

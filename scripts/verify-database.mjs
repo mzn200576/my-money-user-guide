@@ -52,6 +52,20 @@ test("room member ordering and projection use created_at for joinedAt", async (t
   assert.equal(member.joinedAt, "2026-10-01T00:00:00Z");
 });
 
+test("login uses the correct route when Supabase URL already includes /rest/v1", async (t) => {
+  configured(t);
+  setEnv(t, "SUPABASE_URL", "https://classroom.example.test/rest/v1/");
+  t.mock.method(globalThis, "fetch", async (url) => {
+    assert.equal(url.pathname, "/rest/v1/users");
+    return Response.json([]);
+  });
+  const response = await auth.POST(new Request("https://classroom.example.test/api/auth", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "login", username: "student-check", password: "example-password" }),
+  }));
+  assert.equal(response.status, 401);
+});
+
 test("writes map SQL columns without rewriting user JSON; empty writes are accepted", async (t) => {
   configured(t);
   t.mock.method(globalThis, "fetch", async (_url, options) => {
