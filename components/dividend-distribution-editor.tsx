@@ -63,7 +63,7 @@ export function DividendDistributionEditor({
           <div className="mb-2 grid grid-cols-[1fr_1fr_36px] gap-2 text-xs font-semibold text-muted-foreground"><span>주당 배당금($)</span><span>발생확률(%)</span><span /></div>
           <div className="space-y-2">
             {distribution.outcomes.map((outcome, outcomeIndex) => <div key={outcomeIndex} className="grid grid-cols-[1fr_1fr_36px] gap-2">
-              <Input aria-label={`${distribution.name} ${outcomeIndex + 1}행 배당금`} type="number" min={0} step={0.1} value={outcome.value} onChange={(event) => updateOutcome(distributionIndex, outcomeIndex, "value", Number(event.target.value))} className="bg-card" />
+              <Input aria-label={`${distribution.name} ${outcomeIndex + 1}행 배당금`} type="number" min={0} max={10000} step={0.01} value={outcome.value} onChange={(event) => updateOutcome(distributionIndex, outcomeIndex, "value", Number(event.target.value))} className="bg-card" />
               <Input aria-label={`${distribution.name} ${outcomeIndex + 1}행 확률`} type="number" min={0.1} max={100} step={0.1} value={outcome.probability} onChange={(event) => updateOutcome(distributionIndex, outcomeIndex, "probability", Number(event.target.value))} className="bg-card" />
               <Button type="button" size="icon" variant="ghost" disabled={distribution.outcomes.length <= 1} onClick={() => updateDistribution(distributionIndex, { outcomes: distribution.outcomes.filter((_, index) => index !== outcomeIndex) })} aria-label="배당 결과 행 삭제"><Trash2 className="size-4" /></Button>
             </div>)}

@@ -1,24 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, BarChart3, CheckCircle2, CircleDollarSign, Clock3, Copy, Eye, LockKeyhole, Play, RefreshCw, Send, Sparkles, Users } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, CheckCircle2, Clock3, Copy, Eye, LockKeyhole, Play, RefreshCw, Send, Sparkles, Users } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ALLOCATION_ASSETS, ROLE_CARDS, SHOCKS, type AllocationWeights } from "@/lib/course-data";
-import { distributionExpectedValue, distributionForRoom, informationModeForRoom, tradingModeForRoom, type DividendDistribution } from "@/lib/market";
+import { distributionForRoom } from "@/lib/market";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { readJsonResponse } from "@/lib/client-response";
+import { DividendWheel } from "@/components/dividend-wheel";
+import { MarketRoom } from "@/components/market-room";
 
 type User = { id: string; displayName: string; role: string };
-type RoomData = {
+type MarketReceiptData = {
+  openingCashCents: number; tradeCashCents: number; dividendCashCents: number;
+  endingCashCents: number; openingShares: number; endingShares: number; filledQuantity: number;
+};
+export type RoomData = {
   room: { id: string; code: string; type: "allocation" | "market"; title: string; stage: string; status: string; experiment: number; round: number; shockKey: string | null; dividendPaid: number; stageEndsAt: string | null; config: Record<string, unknown> };
   isOwner: boolean;
   member: { id: string; nickname: string; roleKey: string | null; privateInfo: string | null } | null;
@@ -33,6 +37,8 @@ type RoomData = {
   orderCount?: number;
   orderbook?: Array<{ side: string; priceCents: number; quantity: number; status: string }>;
   trades?: Array<{ experiment: number; round: number; priceCents: number; quantity: number }>;
+  marketReceipt?: MarketReceiptData;
+  classReceipts?: Array<MarketReceiptData & { memberId: string; nickname: string }>;
 };
 
 type AllocationResult = {
@@ -55,15 +61,24 @@ const riskOptions = ["원금손실", "물가위험", "금리위험", "유동성�
 export function ClassroomRoom({ code, onExit }: { code: string; user: User; onExit: () => void }) {
   const [data, setData] = useState<RoomData | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const latestLoad = useRef(0);
+  const lastAppliedLoad = useRef(0);
   const load = useCallback(async () => {
+    const requestId = ++latestLoad.current;
     try {
       const res = await fetch(`/api/rooms/${code}`, { cache: "no-store" });
       const payload = await readJsonResponse<RoomData & { error?: string }>(res);
       if (!res.ok) throw new Error(payload.error ?? "방 상태를 불러오지 못했습니다.");
-      setData(payload);
-      setError("");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "방 상태를 불러오지 못했습니다."); }
+      if (requestId >= lastAppliedLoad.current) {
+        lastAppliedLoad.current = requestId;
+        setData(payload);
+        setError("");
+      }
+    } catch (cause) {
+      if (requestId === latestLoad.current) setError(cause instanceof Error ? cause.message : "방 상태를 불러오지 못했습니다.");
+    }
   }, [code]);
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0);
@@ -71,11 +86,12 @@ export function ClassroomRoom({ code, onExit }: { code: string; user: User; onEx
     return () => { window.clearTimeout(initialLoad); window.clearInterval(timer); };
   }, [load]);
   const action = async (body: Record<string, unknown>) => {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setNotice("");
     try {
       const res = await fetch(`/api/rooms/${code}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const payload = await readJsonResponse<{ error?: string }>(res);
+      const payload = await readJsonResponse<{ error?: string; warning?: string }>(res);
       if (!res.ok) throw new Error(payload.error ?? "요청을 처리하지 못했습니다.");
+      if (payload.warning) setNotice(payload.warning);
       await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "요청을 처리하지 못했습니다."); }
     finally { setBusy(false); }
@@ -85,7 +101,12 @@ export function ClassroomRoom({ code, onExit }: { code: string; user: User; onEx
     <div className="mx-auto max-w-[1280px] space-y-5 fade-up">
       <RoomHeader data={data} onExit={onExit} />
       {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+      {notice && <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{notice}</p>}
       {data.room.type === "allocation" ? <AllocationRoom data={data} action={action} busy={busy} /> : <MarketRoom data={data} action={action} busy={busy} />}
+      {data.room.type === "market" && data.room.stage === "results" && data.room.stageEndsAt &&
+        <DividendWheel key={`${data.room.id}-${data.room.round}-${data.room.stageEndsAt}`}
+          distribution={distributionForRoom(data.room.config, data.room.experiment)}
+          dividendCents={data.room.dividendPaid} deadline={data.room.stageEndsAt} />}
     </div>
   );
 }
@@ -159,54 +180,7 @@ function AllocationResultView({ result }: { result: AllocationResult }) {
   return <Card className="overflow-hidden"><div className="bg-[#10294e] p-5 text-white"><p className="text-sm text-blue-100/70">공개된 시장상황</p><div className="mt-1 flex items-end justify-between"><h3 className="text-2xl font-black">{result.shock.label}</h3><span className="text-sm">물가 {result.shock.inflation}%</span></div></div><CardContent className="space-y-6 pt-6"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="명목가치" value={result.nominal.toFixed(1)} /><Metric label="실질가치" value={result.real.toFixed(1)} /><Metric label="즉시유동성" value={result.liquidity.toFixed(1)} /><Metric label="최악상황" value={result.worstValue.toFixed(1)} /></div><div className="grid gap-2 sm:grid-cols-3">{checks.map((check) => <div key={check.label} className={`flex items-center justify-between rounded-xl border p-4 ${check.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}><span className="font-semibold">{check.label}</span><b>{check.ok ? "충족" : "미충족"}</b></div>)}</div><div><h4 className="mb-3 font-bold">자산별 손익 기여도</h4><div className="h-[230px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={result.contributions}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" /><YAxis unit="p" /><Tooltip formatter={(value) => `${Number(value).toFixed(2)}포인트`} /><Bar dataKey="contribution" name="손익 기여" fill="#194b8f" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div></div></CardContent></Card>;
 }
 
-function MarketRoom({ data, action, busy }: { data: RoomData; action: (body: Record<string, unknown>) => Promise<void>; busy: boolean }) {
-  const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [price, setPrice] = useState(5);
-  const [quantity, setQuantity] = useState(1);
-  const maxRounds = Number(data.room.config.rounds ?? 10);
-  const tradingMode = tradingModeForRoom(data.room.config, data.room.experiment);
-  const informationMode = informationModeForRoom(data.room.config, data.room.experiment);
-  const dividendDistribution = distributionForRoom(data.room.config, data.room.experiment);
-  const expectedDividend = Number(data.room.config.expectedDividend ?? distributionExpectedValue(dividendDistribution));
-  const remainingRounds = Math.max(0, maxRounds + 1 - data.room.round);
-  const distributionIsPublic = data.isOwner || informationMode === "full_distribution" || ["results", "complete"].includes(data.room.stage);
-  const information = informationMode === "full_distribution"
-    ? { title: "배당분포 공개", description: "가능한 배당과 확률을 모두 확인하고 거래합니다.", detail: `1장 기대배당 $${expectedDividend.toFixed(2)} · 남은 기대배당가치 $${(expectedDividend * remainingRounds).toFixed(2)}` }
-    : informationMode === "expected_only"
-      ? { title: "기대배당만 공개", description: "기대값만 알고 세부 배당확률은 장 마감 후 확인합니다.", detail: `1장 기대배당 $${expectedDividend.toFixed(2)} · 세부 분포는 비공개` }
-      : { title: "배당정보 비공개", description: "장 마감 전에는 배당의 기대값과 확률분포를 공개하지 않습니다.", detail: "공개된 배당정보 없음" };
-  const tradingModeLabel = tradingMode === "open_book" ? "실시간 호가창" : tradingMode === "close_public" ? "마감 후 호가 공개" : "호가 비공개";
-  const tradeChart = useMemo(() => {
-    const groups = new Map<number, { round: number; total: number; quantity: number }>();
-    for (const trade of data.trades ?? []) {
-      const entry = groups.get(trade.round) ?? { round: trade.round, total: 0, quantity: 0 };
-      entry.total += trade.priceCents * trade.quantity;
-      entry.quantity += trade.quantity;
-      groups.set(trade.round, entry);
-    }
-    return [...groups.values()].sort((a, b) => a.round - b.round).map((entry) => ({ label: `${entry.round}장`, price: entry.quantity ? entry.total / entry.quantity / 100 : 0, quantity: entry.quantity }));
-  }, [data.trades]);
-  if (data.isOwner) return <div className="grid gap-5 xl:grid-cols-[0.72fr_1.28fr]"><Card><CardHeader><CardTitle>선생님 진행 제어</CardTitle><CardDescription>{data.room.round}/{maxRounds}장 · {tradingModeLabel}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="grid grid-cols-2 gap-3"><Metric label="입장" value={`${data.memberCount}명`} /><Metric label="주문" value={`${data.orderCount ?? 0}건`} /></div>{data.room.stage === "lobby" && <Button size="lg" className="w-full" onClick={() => action({ action: "start" })} disabled={busy || data.memberCount === 0}><Play /> 시장 열기</Button>}{data.room.stage === "trading" && <Button size="lg" className="w-full bg-[#c77a0b] hover:bg-[#a86408]" onClick={() => action({ action: "close_market" })} disabled={busy}><LockKeyhole /> 장 마감·동시 체결</Button>}{data.room.stage === "results" && <Button size="lg" className="w-full" onClick={() => action({ action: "next_market" })} disabled={busy}><ChevronRightIcon /> {data.room.round === maxRounds ? "실험 종료" : "다음 장"}</Button>}{data.room.stage === "complete" && <div className="rounded-xl bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">실험이 종료되었습니다.</div>}<div className="rounded-xl bg-muted p-4 text-sm"><p className="font-bold">{information.title}</p><p className="mt-1 text-muted-foreground">{information.detail}</p></div>{distributionIsPublic && <DividendTable distribution={dividendDistribution} />}{data.room.stage === "results" && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><b>이번 장 배당</b><p className="mt-1">{data.room.dividendPaid ? `주당 $${(data.room.dividendPaid / 100).toFixed(2)}` : "$0.00"}</p></div>}</CardContent></Card><MarketOverview data={data} chart={tradeChart} /></div>;
-  if (!data.member) return <WaitCard title="참여자 정보가 없습니다" description="수업 홈에서 코드로 다시 입장해주세요." />;
-  return <div className="grid gap-5 xl:grid-cols-[0.72fr_1.28fr]"><Card className="h-fit"><CardHeader><Badge className="mb-2 w-fit">{data.room.round}장 · {tradingModeLabel}</Badge><CardTitle>{information.title}</CardTitle><CardDescription className="leading-6">{information.description}</CardDescription></CardHeader><CardContent className="space-y-4"><div className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900"><b>현재 공개 정보</b><p className="mt-1">{information.detail}</p></div>{distributionIsPublic && <DividendTable distribution={dividendDistribution} />}<div className="grid grid-cols-2 gap-3"><Metric label="보유 현금" value={`$${((data.holding?.cashCents ?? 0) / 100).toFixed(2)}`} /><Metric label="보유 주식" value={`${data.holding?.shares ?? 0}주`} /></div></CardContent></Card><div className="space-y-5">{data.room.stage === "trading" ? <Card><CardHeader><CardTitle>{tradingMode === "private" ? "비공개 주문 제출" : "매수·매도 호가 제출"}</CardTitle><CardDescription>장 마감 전까지 주문을 수정할 수 있습니다.</CardDescription></CardHeader><CardContent className="space-y-5"><RadioGroup value={side} onValueChange={(value) => setSide(value as "buy" | "sell")} className="grid grid-cols-2 gap-3"><label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-4 ${side === "buy" ? "border-primary bg-blue-50" : ""}`}><RadioGroupItem value="buy" />매수</label><label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-4 ${side === "sell" ? "border-primary bg-blue-50" : ""}`}><RadioGroupItem value="sell" />매도</label></RadioGroup><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="order-price">가격($)</Label><Input id="order-price" type="number" min="0.1" step="0.1" value={price} onChange={(e) => setPrice(Number(e.target.value))} /></div><div className="space-y-2"><Label htmlFor="order-qty">수량</Label><Input id="order-qty" type="number" min="1" step="1" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} /></div></div><Button size="lg" className="w-full" onClick={() => action({ action: "market_order", side, price, quantity })} disabled={busy}><Send /> {data.ownOrder ? "주문 수정" : "주문 제출"}</Button>{data.ownOrder && <div className="rounded-xl bg-muted p-4 text-sm">현재 주문: <b>{data.ownOrder.side === "buy" ? "매수" : "매도"} ${(data.ownOrder.priceCents / 100).toFixed(2)} · {data.ownOrder.quantity}주</b></div>}</CardContent></Card> : data.room.stage === "results" ? <Card><CardHeader><CardTitle>장 마감 결과</CardTitle><CardDescription>동시체결과 배당이 반영된 잔고입니다.</CardDescription></CardHeader><CardContent className="space-y-4"><div className="grid grid-cols-2 gap-3"><Metric label="현금" value={`$${((data.holding?.cashCents ?? 0) / 100).toFixed(2)}`} /><Metric label="주식" value={`${data.holding?.shares ?? 0}주`} /></div><div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900"><b>배당 결과</b><p className="mt-1">{data.room.dividendPaid ? `주당 $${(data.room.dividendPaid / 100).toFixed(2)} 지급` : "이번 장은 배당이 없습니다."}</p></div></CardContent></Card> : <WaitCard title={data.room.stage === "complete" ? "실험이 종료되었습니다" : "선생님의 시작을 기다리는 중"} description="현재 잔고와 제출 기록은 안전하게 보존됩니다." />}<MarketOverview data={data} chart={tradeChart} compact /></div></div>;
-}
-
-function DividendTable({ distribution }: { distribution: DividendDistribution }) {
-  return <div className="rounded-xl border bg-card p-4"><div className="mb-3 flex items-center justify-between"><b className="text-sm">{distribution.name}</b><span className="text-xs text-muted-foreground">기대배당 ${distributionExpectedValue(distribution).toFixed(2)}</span></div><div className="space-y-1.5">{distribution.outcomes.map((outcome, index) => <div key={`${outcome.value}-${index}`} className="grid grid-cols-2 rounded-lg bg-muted px-3 py-2 text-sm"><span>주당 ${outcome.value.toFixed(2)}</span><b className="text-right">{outcome.probability.toFixed(1)}%</b></div>)}</div></div>;
-}
-
-function MarketOverview({ data, chart, compact = false }: { data: RoomData; chart: Array<{ label: string; price: number; quantity: number }>; compact?: boolean }) {
-  const bids = (data.orderbook ?? []).filter((order) => order.side === "buy").sort((a, b) => b.priceCents - a.priceCents);
-  const asks = (data.orderbook ?? []).filter((order) => order.side === "sell").sort((a, b) => a.priceCents - b.priceCents);
-  const tradingMode = tradingModeForRoom(data.room.config, data.room.experiment);
-  const shouldShowOrderbook = data.isOwner || tradingMode === "open_book" || (tradingMode === "close_public" && ["results", "complete"].includes(data.room.stage));
-  const orderbookDescription = tradingMode === "open_book" ? "거래 중에도 전체 주문이 공개됩니다." : tradingMode === "close_public" ? "장 마감 후 전체 주문이 공개됩니다." : "호가는 선생님 화면에서만 확인할 수 있습니다.";
-  return <div className="space-y-5"><Card><CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="text-primary" />시장가격</CardTitle><CardDescription>평균 체결가격의 장별 움직임입니다.</CardDescription></CardHeader><CardContent className="h-[290px]">{chart.length ? <ResponsiveContainer width="100%" height="100%"><LineChart data={chart}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" hide={chart.length > 12} /><YAxis domain={[0, "auto"]} /><Tooltip /><Legend /><Line type="monotone" dataKey="price" name="평균 체결가" stroke="#194b8f" strokeWidth={3} dot={{ r: 4 }} /><Line type="monotone" dataKey="quantity" name="거래량" stroke="#e29d20" strokeDasharray="5 5" /></LineChart></ResponsiveContainer> : <div className="grid h-full place-items-center text-center text-muted-foreground"><div><CircleDollarSign className="mx-auto mb-3 size-9 opacity-30" /><p>체결이 발생하면 가격 그래프가 나타납니다.</p></div></div>}</CardContent></Card>{shouldShowOrderbook && <Card><CardHeader><CardTitle>호가창</CardTitle><CardDescription>{orderbookDescription}</CardDescription></CardHeader><CardContent><div className="grid grid-cols-2 gap-4"><OrderList title="매수" items={bids} tone="blue" /><OrderList title="매도" items={asks} tone="red" /></div></CardContent></Card>}{!compact && <Card><CardHeader><CardTitle>관찰 질문</CardTitle></CardHeader><CardContent className="space-y-2 text-sm text-muted-foreground"><p>• 가격은 남은 기대배당 가치에 가까워졌는가?</p><p>• 설정한 정보·호가 공개 방식은 가격과 거래량에 어떤 영향을 주었는가?</p><p>• 개인 판단과 시장가격이 충돌할 때 무엇을 더 믿었는가?</p></CardContent></Card>}</div>;
-}
-
-function OrderList({ title, items, tone }: { title: string; items: Array<{ priceCents: number; quantity: number }>; tone: "blue" | "red" }) { return <div><p className={`mb-2 text-sm font-bold ${tone === "blue" ? "text-blue-700" : "text-red-700"}`}>{title}</p><div className="space-y-1">{items.slice(0, 8).map((item, index) => <div key={`${item.priceCents}-${index}`} className="flex justify-between rounded-lg bg-muted px-3 py-2 text-sm"><b>${(item.priceCents / 100).toFixed(2)}</b><span>{item.quantity}주</span></div>)}{!items.length && <p className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">주문 없음</p>}</div></div>; }
 function WaitCard({ title, description, role }: { title: string; description: string; role?: (typeof ROLE_CARDS)[number] }) { return <Card className="mx-auto max-w-2xl"><CardContent className="py-12 text-center"><Clock3 className="mx-auto mb-4 size-10 text-primary" /><h3 className="text-2xl font-bold">{title}</h3><p className="mx-auto mt-2 max-w-lg text-muted-foreground">{description}</p>{role && <div className="mx-auto mt-6 max-w-md rounded-xl bg-blue-50 p-4 text-left text-sm text-blue-900"><b>{role.label}</b><p className="mt-1">{role.summary}</p></div>}</CardContent></Card>; }
 function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border bg-card p-4"><p className="text-xs font-semibold text-muted-foreground">{label}</p><p className="number-tabular mt-1 text-xl font-black tracking-tight">{value}</p></div>; }
-function stageLabel(stage: string) { return ({ lobby: "대기실", allocate: "최초 배분", shock: "충격 공개", revise: "수정", trading: "거래 중", results: "장 마감", complete: "종료" } as Record<string, string>)[stage] ?? stage; }
-function ChevronRightIcon() { return <span aria-hidden>→</span>; }
+function stageLabel(stage: string) { return ({ lobby: "대기실", allocate: "최초 배분", shock: "충격 공개", revise: "수정", trading: "거래 중", awaiting_dividend: "배당 결정 대기", results: "배당 결과", complete: "종료" } as Record<string, string>)[stage] ?? stage; }
 function Countdown({ deadline }: { deadline: string }) { const [seconds, setSeconds] = useState(() => Math.max(0, Math.ceil((new Date(deadline).getTime() - Date.now()) / 1000))); useEffect(() => { const timer = window.setInterval(() => setSeconds(Math.max(0, Math.ceil((new Date(deadline).getTime() - Date.now()) / 1000))), 1000); return () => window.clearInterval(timer); }, [deadline]); return <Badge className={seconds <= 10 ? "bg-red-600 text-white" : "bg-amber-100 text-amber-900"}><Clock3 className="mr-1 size-3" />{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</Badge>; }

@@ -112,8 +112,8 @@ export function deleteRows<T>(table: string, filters: Record<string, FilterValue
   return tableRequest<T>(table, "DELETE", { filters }, undefined, returnRows);
 }
 
-function callDatabaseFunction<T>(name: string, args: unknown): Promise<T> {
-  return requestDatabase(`rpc/${name}`, { method: "POST", body: rpcArguments(args) }) as Promise<T>;
+function callDatabaseFunction<T>(name: string, args: unknown, returnValue = false): Promise<T> {
+  return requestDatabase(`rpc/${name}`, { method: "POST", body: rpcArguments(args), returnRows: returnValue }) as Promise<T>;
 }
 export function joinClassroom(args: {
   pMemberId: string; pRoomId: string; pUserId: string; pNickname: string;
@@ -134,4 +134,14 @@ export function applyMarketClose(args: {
   pOrders: Array<{ id: string; remaining: number; status: string }>;
 }) {
   return callDatabaseFunction<void>("apply_market_close", args);
+}
+
+export function marketDividendV2Available() {
+  return callDatabaseFunction<boolean>("market_dividend_v2_available", {}, true);
+}
+
+export function decideMarketDividend(args: {
+  pRoomId: string; pExperiment: number; pRound: number; pVersion: number; pDividendPaid: number;
+}) {
+  return callDatabaseFunction<void>("decide_market_dividend", args);
 }

@@ -104,6 +104,16 @@ test("market settlement passes expected version and preserves a conflict respons
   (error) => error.status === 409 && error.details === "PT409");
 });
 
+test("market dividend upgrade is detected before enabling the separate payout", async (t) => {
+  configured(t);
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    assert.equal(url.pathname, "/rest/v1/rpc/market_dividend_v2_available");
+    assert.equal(options.headers.Prefer, "return=representation");
+    return Response.json(true);
+  });
+  assert.equal(await db.marketDividendV2Available(), true);
+});
+
 test("unscoped updates and unknown columns never reach the network", async (t) => {
   configured(t);
   const fetch = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected fetch"); });

@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "test": "node --test scripts/verify-database.mjs",
+    "test": "node --test scripts/verify-database.mjs scripts/verify-market.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "db:setup-file": "node scripts/prepare-database.mjs"

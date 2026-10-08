@@ -1,4 +1,4 @@
-import { applyMarketClose, eqFilter, insertRows, saveMarketOrder, selectRows, updateRows } from "@/db";
+import { applyMarketClose, DatabaseError, decideMarketDividend, eqFilter, insertRows, marketDividendV2Available, saveMarketOrder, selectRows, updateRows } from "@/db";
 import type {
   AllocationSubmissionRow,
   MarketHoldingRow,
@@ -10,6 +10,7 @@ import type {
 import { routeError } from "@/lib/api-response";
 import { ALLOCATION_ASSETS, calculateAllocation, SHOCKS, type AllocationWeights } from "@/lib/course-data";
 import { distributionExpectedValue, distributionForRoom, drawDividendValue, informationModeForRoom, tradingModeForRoom } from "@/lib/market";
+import { addMarketDividend, marketReceipt, settleMarketOrders } from "@/lib/market-settlement";
 import { requireAppUser } from "@/lib/server-auth";
 
 type Context = { params: Promise<{ code: string }> };
@@ -87,11 +88,24 @@ async function handleGet(request: Request, context: Context) {
     response.ownOrder = member ? orders.find((order) => order.memberId === member.id) ?? null : null;
     response.orderCount = orders.length;
     const tradingMode = tradingModeForRoom(parsedConfig, room.experiment);
-    const canSeeOrderbook = isOwner || tradingMode === "open_book" || (tradingMode === "close_public" && ["results", "complete"].includes(room.stage));
+    const canSeeOrderbook = isOwner || tradingMode === "open_book" || (tradingMode === "close_public" && ["awaiting_dividend", "results", "complete"].includes(room.stage));
     response.orderbook = canSeeOrderbook
       ? orders.map((order) => ({ side: order.side, priceCents: order.priceCents, quantity: order.remaining, status: order.status }))
       : [];
     response.trades = trades.map((trade) => ({ experiment: trade.experiment, round: trade.round, priceCents: trade.priceCents, quantity: trade.quantity }));
+    if (["awaiting_dividend", "results", "complete"].includes(room.stage)) {
+      const currentTrades = trades.filter((trade) => trade.experiment === room.experiment && trade.round === room.round);
+      const dividendCents = room.stage === "awaiting_dividend" ? 0 : room.dividendPaid;
+      if (member && holding) response.marketReceipt = marketReceipt(holding, currentTrades, member.id, dividendCents);
+      if (isOwner) {
+        const allHoldings = await selectRows<MarketHoldingRow>("market_holdings", { filters: { roomId: eqFilter(room.id) } });
+        response.classReceipts = allHoldings.map((item) => ({
+          memberId: item.memberId,
+          nickname: members.find((participant) => participant.id === item.memberId)?.nickname ?? "참여자",
+          ...marketReceipt(item, currentTrades, item.memberId, dividendCents),
+        }));
+      }
+    }
   }
   return Response.json(response);
 }
@@ -143,10 +157,16 @@ async function handlePost(request: Request, context: Context) {
 
   if (body.action === "market_order") {
     if (!member) return Response.json({ error: "참여자만 주문할 수 있습니다." }, { status: 403 });
-    if (room.stage !== "trading") return Response.json({ error: "현재 장이 열려 있지 않습니다." }, { status: 409 });
-    const priceCents = Math.round(Number(body.price) * 100);
-    const quantity = Math.floor(Number(body.quantity));
-    if (!["buy", "sell"].includes(body.side ?? "") || !Number.isSafeInteger(priceCents) || !Number.isSafeInteger(quantity) || priceCents <= 0 || quantity <= 0) return Response.json({ error: "가격과 수량을 확인해주세요." }, { status: 400 });
+    if (room.type !== "market" || room.stage !== "trading") return Response.json({ error: "현재 장이 열려 있지 않습니다." }, { status: 409 });
+    const requestedPrice = Number(body.price);
+    const priceCents = Math.round(requestedPrice * 100);
+    const quantity = Number(body.quantity);
+    if (!["buy", "sell"].includes(body.side ?? "") || !Number.isFinite(requestedPrice) ||
+        Math.abs(requestedPrice * 100 - priceCents) > 1e-7 ||
+        !Number.isInteger(priceCents) || !Number.isInteger(quantity) ||
+        priceCents <= 0 || quantity <= 0 || priceCents > 2_147_483_647 || quantity > 2_147_483_647) {
+      return Response.json({ error: "가격은 센트 단위, 수량은 정수로 입력해주세요." }, { status: 400 });
+    }
     const [holding] = await selectRows<MarketHoldingRow>("market_holdings", { filters: { roomId: eqFilter(room.id), memberId: eqFilter(member.id) }, limit: 1 });
     if (!holding) return Response.json({ error: "잔고를 찾을 수 없습니다." }, { status: 409 });
     if (body.side === "buy" && priceCents * quantity > holding.cashCents) return Response.json({ error: "주문에 필요한 현금이 부족합니다." }, { status: 400 });
@@ -161,6 +181,7 @@ async function handlePost(request: Request, context: Context) {
   if (!isOwner) return Response.json({ error: "방장 권한이 필요합니다." }, { status: 403 });
 
   if (body.action === "start") {
+    if (room.stage !== "lobby") return Response.json({ error: "이미 수업이 시작되었습니다." }, { status: 409 });
     const config = JSON.parse(room.config) as { secondsPerRound?: number };
     const stageEndsAt = room.type === "market" ? new Date(Date.now() + (config.secondsPerRound ?? 60) * 1000).toISOString() : null;
     await updateRows<RoomRow>("rooms", { status: "active", stage: room.type === "allocation" ? "allocate" : "trading", stageEndsAt, updatedAt: new Date().toISOString() }, { id: eqFilter(room.id) });
@@ -177,6 +198,7 @@ async function handlePost(request: Request, context: Context) {
     return Response.json({ ok: true });
   }
   if (body.action === "complete") {
+    if (room.type === "market") return Response.json({ error: "장은 다음 장 버튼으로 종료해주세요." }, { status: 409 });
     await updateRows<RoomRow>("rooms", { stage: "complete", status: "complete", updatedAt: new Date().toISOString() }, { id: eqFilter(room.id) });
     return Response.json({ ok: true });
   }
@@ -184,63 +206,47 @@ async function handlePost(request: Request, context: Context) {
     if (room.stage !== "trading") return Response.json({ error: "현재 장이 열려 있지 않습니다." }, { status: 409 });
     const orders = await selectRows<MarketOrderRow>("market_orders", { filters: { roomId: eqFilter(room.id), experiment: eqFilter(room.experiment), round: eqFilter(room.round) } });
     const holdings = await selectRows<MarketHoldingRow>("market_holdings", { filters: { roomId: eqFilter(room.id) } });
-    const holdingMap = new Map(holdings.map((holding) => [holding.memberId, { ...holding }]));
-    const buys = orders.filter((order) => order.side === "buy").sort((a, b) => b.priceCents - a.priceCents || a.createdAt.localeCompare(b.createdAt));
-    const sells = orders.filter((order) => order.side === "sell").sort((a, b) => a.priceCents - b.priceCents || a.createdAt.localeCompare(b.createdAt));
-    const trades: Array<{ id: string; buyer: string; seller: string; price: number; quantity: number }> = [];
-    let bi = 0;
-    let si = 0;
-    while (bi < buys.length && si < sells.length) {
-      const buy = buys[bi];
-      const sell = sells[si];
-      if (buy.priceCents < sell.priceCents) break;
-      const buyer = holdingMap.get(buy.memberId)!;
-      const seller = holdingMap.get(sell.memberId)!;
-      const price = Math.round((buy.priceCents + sell.priceCents) / 2);
-      const affordable = Math.floor(buyer.cashCents / price);
-      const quantity = Math.min(buy.remaining, sell.remaining, affordable, seller.shares);
-      if (quantity <= 0) {
-        if (affordable <= 0) bi += 1;
-        if (seller.shares <= 0) si += 1;
-        continue;
-      }
-      buyer.cashCents -= price * quantity;
-      buyer.shares += quantity;
-      seller.cashCents += price * quantity;
-      seller.shares -= quantity;
-      buy.remaining -= quantity;
-      sell.remaining -= quantity;
-      trades.push({ id: crypto.randomUUID(), buyer: buy.memberId, seller: sell.memberId, price, quantity });
-      if (buy.remaining === 0) bi += 1;
-      if (sell.remaining === 0) si += 1;
+    const settlement = settleMarketOrders(orders, holdings, () => crypto.randomUUID());
+    let delayedDividend = false;
+    try {
+      delayedDividend = await marketDividendV2Available();
+    } catch (error) {
+      // An older database can still close markets using its original atomic settlement.
+      if (!(error instanceof DatabaseError && error.details === "PGRST202")) throw error;
     }
     const marketConfig = JSON.parse(room.config) as Record<string, unknown>;
-    const dividendDistribution = distributionForRoom(marketConfig, room.experiment);
-    const dividendCents = Math.round(drawDividendValue(dividendDistribution, randomUnit()) * 100);
-    if (dividendCents) for (const holding of holdingMap.values()) holding.cashCents += holding.shares * dividendCents;
+    const dividendCents = delayedDividend ? -1 :
+      Math.round(drawDividendValue(distributionForRoom(marketConfig, room.experiment), randomUnit()) * 100);
+    const finalHoldings = delayedDividend ? settlement.holdings : addMarketDividend(settlement.holdings, dividendCents);
     await applyMarketClose({
       pRoomId: room.id,
       pVersion: room.version,
       pExperiment: room.experiment,
       pRound: room.round,
       pDividendPaid: dividendCents,
-      pHoldings: [...holdingMap.values()].map((holding) => ({ id: holding.id, cashCents: holding.cashCents, shares: holding.shares })),
-      pTrades: trades.map((trade) => ({
-        id: trade.id,
-        buyerMemberId: trade.buyer,
-        sellerMemberId: trade.seller,
-        priceCents: trade.price,
-        quantity: trade.quantity,
-      })),
-      pOrders: orders.map((order) => ({
-        id: order.id,
-        remaining: order.remaining,
-        status: order.remaining === 0 ? "filled" : order.remaining < order.quantity ? "partial" : "cancelled",
-      })),
+      pHoldings: finalHoldings.map((holding) => ({ id: holding.id, cashCents: holding.cashCents, shares: holding.shares })),
+      pTrades: settlement.trades,
+      pOrders: settlement.orders,
     });
-    return Response.json({ ok: true, tradeCount: trades.length, dividendCents });
+    return Response.json({
+      ok: true, tradeCount: settlement.trades.length,
+      ...(delayedDividend ? {} : { warning: "배당 추첨 기능을 사용하려면 선생님이 Supabase에 새 SQL을 적용해야 합니다. 이번 장은 기존 방식으로 정산했습니다." }),
+    });
+  }
+  if (body.action === "decide_dividend" && room.type === "market") {
+    if (room.stage !== "awaiting_dividend") return Response.json({ error: "먼저 장을 마감해주세요." }, { status: 409 });
+    const distribution = distributionForRoom(JSON.parse(room.config) as Record<string, unknown>, room.experiment);
+    const dividendCents = Math.round(drawDividendValue(distribution, randomUnit()) * 100);
+    await decideMarketDividend({
+      pRoomId: room.id, pExperiment: room.experiment, pRound: room.round,
+      pVersion: room.version, pDividendPaid: dividendCents,
+    });
+    return Response.json({ ok: true });
   }
   if (body.action === "next_market" && room.type === "market") {
+    if (room.stage !== "results" || (room.stageEndsAt && Date.now() < Date.parse(room.stageEndsAt))) {
+      return Response.json({ error: "배당 추첨이 끝난 뒤 다음 장으로 진행해주세요." }, { status: 409 });
+    }
     const config = JSON.parse(room.config) as { rounds?: number; secondsPerRound?: number };
     const maxRounds = config.rounds ?? 10;
     const nextRound = room.round + 1;

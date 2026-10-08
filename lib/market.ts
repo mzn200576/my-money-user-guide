@@ -43,8 +43,10 @@ export function validateDividendDistributions(distributions: DividendDistributio
   for (const distribution of distributions) {
     if (!distribution.name.trim()) return "각 배당확률분포의 이름을 입력해주세요.";
     if (!distribution.outcomes.length) return `${distribution.name}에 배당 결과를 하나 이상 추가해주세요.`;
-    if (distribution.outcomes.some((outcome) => !Number.isFinite(outcome.value) || outcome.value < 0)) {
-      return `${distribution.name}의 배당금은 0 이상이어야 합니다.`;
+    if (distribution.outcomes.some((outcome) => !Number.isFinite(outcome.value) ||
+      outcome.value < 0 || outcome.value > 10_000 ||
+      Math.abs(outcome.value * 100 - Math.round(outcome.value * 100)) > 1e-7)) {
+      return `${distribution.name}의 배당금은 0~10,000달러 사이이며 센트 단위여야 합니다.`;
     }
     if (distribution.outcomes.some((outcome) => !Number.isFinite(outcome.probability) || outcome.probability <= 0 || outcome.probability > 100)) {
       return `${distribution.name}의 확률은 0보다 크고 100 이하여야 합니다.`;
