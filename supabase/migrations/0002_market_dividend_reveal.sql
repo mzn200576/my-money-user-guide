@@ -3,6 +3,38 @@
 -- A -1 dividend is an internal signal to close trading without paying yet.
 BEGIN;
 
+-- Prevent a late entrant from receiving the just-closed round's dividend.
+CREATE OR REPLACE FUNCTION public.join_classroom(
+  p_member_id text, p_room_id text, p_user_id text, p_nickname text,
+  p_role_key text, p_private_info text
+) RETURNS text LANGUAGE plpgsql SECURITY INVOKER SET search_path = public AS $$
+DECLARE
+  current_room rooms%ROWTYPE;
+  existing_id text;
+  settings jsonb;
+BEGIN
+  SELECT * INTO current_room FROM rooms WHERE id = p_room_id FOR UPDATE;
+  IF NOT FOUND OR current_room.status = 'complete' THEN
+    RAISE sqlstate 'PT409' USING message = '이미 종료되었거나 없는 방입니다.';
+  END IF;
+  SELECT id INTO existing_id FROM room_members WHERE room_id = p_room_id AND user_id = p_user_id;
+  IF FOUND THEN RETURN existing_id; END IF;
+  IF current_room.type = 'market' AND current_room.stage = 'awaiting_dividend' THEN
+    RAISE sqlstate 'PT409' USING message = '배당 추첨이 끝난 다음 장에서 입장할 수 있습니다.';
+  END IF;
+  INSERT INTO room_members (id, room_id, user_id, nickname, role_key, private_info)
+  VALUES (p_member_id, p_room_id, p_user_id, p_nickname, p_role_key, p_private_info);
+  IF current_room.type = 'market' THEN
+    settings := current_room.config::jsonb;
+    INSERT INTO market_holdings (id, room_id, member_id, cash_cents, shares)
+    VALUES (gen_random_uuid()::text, p_room_id, p_member_id,
+      round(COALESCE((settings->>'initialCash')::numeric, 50) * 100)::integer,
+      floor(COALESCE((settings->>'initialShares')::numeric, 5))::integer);
+  END IF;
+  RETURN p_member_id;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.apply_market_close(
   p_room_id text, p_experiment integer, p_round integer, p_version integer, p_dividend_paid integer,
   p_holdings jsonb, p_trades jsonb, p_orders jsonb
