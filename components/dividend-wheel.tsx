@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import type { DividendDistribution } from "@/lib/market";
+import { aggregatedDividendOutcomes, type DividendDistribution } from "@/lib/market";
 
 export const DIVIDEND_SPIN_MS = 8_000;
 const colors = ["#194b8f", "#e5a63a", "#168b8b", "#9a63b3", "#dd775c", "#58a16a",
@@ -23,15 +23,17 @@ export function DividendWheel({
     return () => window.clearInterval(interval);
   }, [finishAt]);
 
+  // Equal dollar outcomes form one sector so its size matches their combined chance.
+  const outcomes = useMemo(() => aggregatedDividendOutcomes(distribution), [distribution]);
   const wheel = useMemo(() => {
     let offset = 0;
     const stops: string[] = [];
     let winningAngle = 0;
     let foundWinner = false;
-    for (const [index, outcome] of distribution.outcomes.entries()) {
+    for (const [index, outcome] of outcomes.entries()) {
       const end = offset + outcome.probability;
       stops.push(`${colors[index % colors.length]} ${offset}% ${end}%`);
-      if (!foundWinner && Math.round(outcome.value * 100) === dividendCents) {
+      if (!foundWinner && outcome.cents === dividendCents) {
         winningAngle = (offset + end) * 1.8;
         foundWinner = true;
       }
@@ -42,7 +44,7 @@ export function DividendWheel({
       // Six full turns, then stop at the center of the drawn probability sector.
       stop: `${2160 - winningAngle}deg`,
     };
-  }, [distribution, dividendCents]);
+  }, [outcomes, dividendCents]);
 
   if (!Number.isFinite(finishAt) || timeLeft <= 0) return null;
   const discStyle = {
@@ -64,10 +66,10 @@ export function DividendWheel({
           <div aria-hidden className="absolute inset-[38%] grid place-items-center rounded-full border-4 border-white/80 bg-[#10294e] text-xl font-black">배당</div>
         </div>
         <div className="mt-7 grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {distribution.outcomes.map((outcome, index) => (
+          {outcomes.map((outcome, index) => (
             <div key={index} className="flex items-center justify-between gap-2 rounded-lg bg-white/10 px-3 py-2 text-sm">
               <span className="flex items-center gap-2"><span className="size-3 shrink-0 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} />
-                ${outcome.value.toFixed(2)}</span>
+                ${(outcome.cents / 100).toFixed(2)}</span>
               <b>{outcome.probability.toFixed(1)}%</b>
             </div>
           ))}

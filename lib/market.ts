@@ -136,3 +136,12 @@ export function drawDividendValue(distribution: DividendDistribution, random: nu
   }
   return distribution.outcomes.at(-1)?.value ?? 0;
 }
+
+export function aggregatedDividendOutcomes(distribution: DividendDistribution) {
+  const combined = new Map<number, number>();
+  for (const outcome of distribution.outcomes) {
+    const cents = Math.round(outcome.value * 100);
+    combined.set(cents, (combined.get(cents) ?? 0) + outcome.probability);
+  }
+  return [...combined].map(([cents, probability]) => ({ cents, probability }));
+}

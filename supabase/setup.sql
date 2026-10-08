@@ -322,7 +322,7 @@ BEGIN
   END IF;
   SELECT id INTO existing_id FROM room_members WHERE room_id = p_room_id AND user_id = p_user_id;
   IF FOUND THEN RETURN existing_id; END IF;
-  IF current_room.type = 'market' AND current_room.stage = 'awaiting_dividend' THEN
+  IF current_room.type = 'market' AND current_room.stage NOT IN ('lobby', 'trading') THEN
     RAISE sqlstate 'PT409' USING message = '배당 추첨이 끝난 다음 장에서 입장할 수 있습니다.';
   END IF;
   INSERT INTO room_members (id, room_id, user_id, nickname, role_key, private_info)

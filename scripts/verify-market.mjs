@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addMarketDividend, marketReceipt, settleMarketOrders } from "../lib/market-settlement.ts";
-import { drawDividendValue } from "../lib/market.ts";
+import { aggregatedDividendOutcomes, drawDividendValue } from "../lib/market.ts";
 
 function order(id, memberId, side, priceCents, quantity, createdAt = id) {
   return { id, memberId, side, priceCents, quantity, remaining: quantity, createdAt };
@@ -57,6 +57,16 @@ test("draw follows probability boundaries, including a zero-dollar outcome", () 
   assert.equal(drawDividendValue(distribution, 0.2), 1.5);
   assert.equal(drawDividendValue(distribution, 0.5), 4);
   assert.equal(drawDividendValue(distribution, 0.999999), 4);
+});
+
+test("the wheel combines repeated amounts into sectors with their full probability", () => {
+  const distribution = { id: "repeated", name: "test", outcomes: [
+    { value: 2, probability: 20 }, { value: 0, probability: 30 }, { value: 2, probability: 50 },
+  ] };
+  assert.deepEqual(aggregatedDividendOutcomes(distribution), [
+    { cents: 200, probability: 70 }, { cents: 0, probability: 30 },
+  ]);
+  assert.equal(drawDividendValue(distribution, 0.99), 2);
 });
 
 test("dividend overflow is rejected before persisting balances", () => {
