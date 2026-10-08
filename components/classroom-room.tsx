@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle2, Clock3, Copy, Eye, LockKeyhole, Play, RefreshCw, Send, Sparkles, Users } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ALLOCATION_ASSETS, ROLE_CARDS, SHOCKS, type AllocationWeights } from "@/lib/course-data";
 import { distributionForRoom } from "@/lib/market";
 import { Badge } from "@/components/ui/badge";
