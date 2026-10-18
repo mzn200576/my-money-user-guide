@@ -1,4 +1,5 @@
 import { lookup } from "node:dns/promises";
+import { createHash } from "node:crypto";
 
 // Temporary build-time probe. Never print connection details or secret values.
 const raw = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -22,7 +23,10 @@ const hostType = host.endsWith(".supabase.co") ? "supabase.co"
   : host.endsWith(".supabase.com") ? "supabase.com" : "other";
 const keyType = key.startsWith("sb_secret_") ? "secret"
   : key.startsWith("eyJ") ? "legacy_jwt" : "other";
-console.log(`[db-check] scheme=${url.protocol} host_type=${hostType} placeholder=${looksPlaceholder} key_type=${keyType}`);
+const hostFingerprint = createHash("sha256").update(host).digest("hex").slice(0, 16);
+const matchesPausedProject = hostFingerprint === "5494fea0d2cc4c1d";
+const keyLooksPlaceholder = /replace|placeholder|example|sample|your[_-]|test[_-]/i.test(key);
+console.log(`[db-check] scheme=${url.protocol} host_type=${hostType} placeholder=${looksPlaceholder} matches_paused_project=${matchesPausedProject} key_type=${keyType} key_placeholder=${keyLooksPlaceholder}`);
 try {
   await lookup(host);
   console.log("[db-check] dns=ok");
