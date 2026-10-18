@@ -148,6 +148,7 @@ Vercel CLI를 쓰면 `vercel link` 후 `vercel env pull .env.local`로 가져오
 | Vercel에 저장소가 안 보임 | Vercel GitHub 앱이 새 저장소에 접근 가능한지 확인 |
 | Build에서 package.json을 못 찾음 | 저장소 루트와 Root Directory 확인 |
 | 화면은 뜨는데 회원가입 실패 | Production 환경변수, Supabase 실행 상태, setup.sql 실행 여부 확인 |
+| 로그인에 '수업 데이터베이스가 중단되었습니다' 표시 | Supabase 대시보드에서 기존 프로젝트가 Paused 상태인지 확인하고 **Resume project**를 누릅니다. 계속되면 Vercel의 `SUPABASE_URL`과 해당 프로젝트의 Project URL을 비교합니다. 기존 DB에 `setup.sql`을 다시 실행하지 않습니다. |
 | 선생님 가입만 실패 | TEACHER_SIGNUP_CODE 값과 입력 코드 일치 확인 |
 | 방 입장/주문 시 함수가 없다고 나옴 | setup.sql에 포함된 join_classroom/save_market_order/apply_market_close 생성 여부 확인 |
 | 장 마감 시 다시 누르라는 안내 | 계산 중 주문/참가자가 바뀐 경우. 잠시 후 마감을 다시 실행 |

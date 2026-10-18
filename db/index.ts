@@ -67,7 +67,11 @@ async function requestDatabase(path: string, options: { method?: string; body?: 
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       cache: "no-store", signal: AbortSignal.timeout(15_000),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.cause && typeof error.cause === "object" &&
+      "code" in error.cause && error.cause.code === "ENOTFOUND") {
+      throw new DatabaseError("데이터베이스 서버 주소를 찾지 못했습니다.", 503, "DB_HOST_NOT_FOUND");
+    }
     throw new DatabaseError("데이터베이스에 연결하지 못했습니다.", 503);
   }
   const text = await response.text();

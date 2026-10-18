@@ -90,6 +90,22 @@ test("network failures do not leak request or key details", async (t) => {
   await assert.rejects(db.selectRows("users"), (error) => error.status === 503 && !error.message.includes("transport"));
 });
 
+test("a paused database hostname produces actionable login feedback without exposing its URL", async (t) => {
+  configured(t);
+  t.mock.method(console, "error", () => {});
+  t.mock.method(globalThis, "fetch", async () => {
+    throw new TypeError("fetch failed", { cause: Object.assign(new Error("hostname: classroom.example.test"), { code: "ENOTFOUND" }) });
+  });
+  const response = await auth.POST(new Request("https://classroom.example.test/api/auth", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "login", username: "student-check", password: "example-password" }),
+  }));
+  assert.equal(response.status, 503);
+  const { error } = await response.json();
+  assert.match(error, /일시 중지/);
+  assert.doesNotMatch(error, /classroom\.example\.test|sb_secret/);
+});
+
 test("market settlement passes expected version and preserves a conflict response", async (t) => {
   configured(t);
   t.mock.method(globalThis, "fetch", async (url, options) => {
