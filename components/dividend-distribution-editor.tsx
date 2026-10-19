@@ -47,7 +47,7 @@ export function DividendDistributionEditor({
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <Label className="text-base font-bold">배당확률분포</Label>
-        <p className="mt-1 text-sm text-muted-foreground">필요한 분포를 여러 개 만들어 두고 이번 방에서 사용할 하나를 선택합니다. 각 확률 합계는 100%여야 합니다.</p>
+        <p className="mt-1 text-sm text-muted-foreground">분포를 여러 개 만든 뒤 각 장에 지정할 수 있습니다. 각 분포의 확률 합계는 100%여야 합니다.</p>
       </div>
       <Button type="button" variant="outline" size="sm" onClick={addDistribution}><Plus /> 분포 추가</Button>
     </div>
@@ -76,7 +76,7 @@ export function DividendDistributionEditor({
       })}
     </div>
     <div className="border-t pt-4">
-      <Label className="font-bold">이번 방에서 사용할 분포</Label>
+      <Label className="font-bold">장별로 따로 지정하지 않았을 때의 기본 분포</Label>
       <Select value={activeDistributionId || distributions[0]?.id} onValueChange={onActiveDistributionChange}>
         <SelectTrigger className="mt-2 w-full bg-card"><SelectValue /></SelectTrigger>
         <SelectContent>{distributions.map((distribution) => <SelectItem key={distribution.id} value={distribution.id}>{distribution.name}</SelectItem>)}</SelectContent>
