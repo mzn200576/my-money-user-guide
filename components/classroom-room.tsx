@@ -80,11 +80,12 @@ export function ClassroomRoom({ code, onExit }: { code: string; user: User; onEx
       if (requestId === latestLoad.current) setError(cause instanceof Error ? cause.message : "방 상태를 불러오지 못했습니다.");
     }
   }, [code]);
+  const refreshMs = data?.room.type === "market" && data.room.stage === "awaiting_dividend" ? 700 : 2500;
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void load(), 0);
-    const timer = window.setInterval(() => void load(), 2500);
+    const timer = window.setInterval(() => void load(), refreshMs);
     return () => { window.clearTimeout(initialLoad); window.clearInterval(timer); };
-  }, [load]);
+  }, [load, refreshMs]);
   const action = async (body: Record<string, unknown>) => {
     setBusy(true); setError(""); setNotice("");
     try {

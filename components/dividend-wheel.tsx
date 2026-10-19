@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { aggregatedDividendOutcomes, type DividendDistribution } from "@/lib/market";
 
 export const DIVIDEND_SPIN_MS = 8_000;
+const SPIN_TURNS = 11;
 const colors = ["#194b8f", "#e5a63a", "#168b8b", "#9a63b3", "#dd775c", "#58a16a",
   "#365fab", "#e3829d", "#668c39", "#d08736", "#685ac2", "#559aaf"];
 
@@ -28,7 +29,7 @@ export function DividendWheel({
   const wheel = useMemo(() => {
     if (!distribution) return {
       gradient: "repeating-conic-gradient(#194b8f 0deg 45deg, #e5a63a 45deg 90deg)",
-      stop: "2182deg",
+      stop: `${SPIN_TURNS * 360 + 22}deg`,
     };
     let offset = 0;
     const stops: string[] = [];
@@ -45,8 +46,8 @@ export function DividendWheel({
     }
     return {
       gradient: `conic-gradient(${stops.join(", ")})`,
-      // Six full turns, then stop at the center of the drawn probability sector.
-      stop: `${2160 - winningAngle}deg`,
+      // Extra full turns create a fast opening without changing the selected sector.
+      stop: `${SPIN_TURNS * 360 - winningAngle}deg`,
     };
   }, [distribution, outcomes, dividendCents]);
 
