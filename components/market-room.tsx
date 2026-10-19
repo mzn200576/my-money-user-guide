@@ -10,7 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { distributionExpectedValue, distributionForRoom, informationModeForRoom, tradingModeForRoom, type DividendDistribution } from "@/lib/market";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { distributionExpectedValue, distributionForRoom, informationModeForRoom, tradingModeForRoom, type DividendDistribution, type MemberInformationModes } from "@/lib/market";
 
 type Props = { data: RoomData; action: (body: Record<string, unknown>) => Promise<void>; busy: boolean };
 type Receipt = NonNullable<RoomData["marketReceipt"]>;
@@ -21,20 +22,22 @@ export function MarketRoom({ data, action, busy }: Props) {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [price, setPrice] = useState(5);
   const [quantity, setQuantity] = useState(1);
+  const [selectedInfoRound, setSelectedInfoRound] = useState(1);
   const stage = data.room.stage;
   const maxRounds = Number(data.room.config.rounds ?? 10);
   const mode = tradingModeForRoom(data.room.config, data.room.experiment);
   const infoMode = informationModeForRoom(data.room.config, data.room.experiment);
-  const distribution = distributionForRoom(data.room.config, data.room.experiment);
-  const expected = Number(data.room.config.expectedDividend ?? distributionExpectedValue(distribution));
-  const distributionPublic = data.isOwner || infoMode === "full_distribution" || ["results", "complete"].includes(stage);
+  const distributionPublic = data.isOwner || infoMode === "full_distribution";
+  const distribution = distributionPublic ? distributionForRoom(data.room.config, data.room.experiment, data.room.round) : null;
+  const expected = Number(data.room.config.expectedDividend ?? (distribution ? distributionExpectedValue(distribution) : 0));
   const infoTitle = infoMode === "full_distribution" ? "배당분포 공개" : infoMode === "expected_only" ? "기대배당만 공개" : "배당정보 비공개";
   const infoDetail = infoMode === "hidden" ? "공개된 배당정보 없음" :
-    "1장 기대배당 $" + expected.toFixed(2) + (infoMode === "full_distribution"
-      ? " · 남은 기대배당가치 $" + (expected * Math.max(0, maxRounds + 1 - data.room.round)).toFixed(2)
-      : " · 세부 분포는 배당 결정 전까지 비공개");
+    "이번 장 기대배당 $" + expected.toFixed(2) + (infoMode === "expected_only" ? " · 세부 분포는 비공개" : "");
   const modeLabel = mode === "open_book" ? "실시간 호가창" : mode === "close_public" ? "마감 후 호가 공개" : "호가 비공개";
   const wheelRunning = stage === "results" && !!data.room.stageEndsAt && Date.parse(data.room.stageEndsAt) > Date.now();
+  const firstEditableRound = stage === "lobby" ? 1 : data.room.round + 1;
+  const infoRound = Math.max(firstEditableRound, selectedInfoRound);
+  const overrides = (data.room.config.memberInformationModes ?? {}) as MemberInformationModes;
   const chart = useMemo(() => {
     const groups = new Map<number, { round: number; total: number; quantity: number }>();
     for (const trade of data.trades ?? []) {
@@ -69,16 +72,42 @@ export function MarketRoom({ data, action, busy }: Props) {
             <span aria-hidden>→</span> {data.room.round === maxRounds ? "실험 종료" : "다음 장"}</Button>}
           {stage === "complete" && <p className="rounded-xl bg-emerald-50 p-4 font-semibold text-emerald-800">실험이 종료되었습니다.</p>}
           <div className="rounded-xl bg-muted p-4 text-sm"><b>{infoTitle}</b><p className="mt-1">{infoDetail}</p></div>
-          {distributionPublic && <DividendTable distribution={distribution} />}
+          {distribution && <DividendTable distribution={distribution} />}
           {stage === "results" && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
             이번 장 배당: <b>주당 {money(data.room.dividendPaid)}</b></div>}
         </CardContent></Card>
+      {firstEditableRound <= maxRounds && stage !== "complete" && <Card><CardHeader><CardTitle>학생별 배당 정보 공개</CardTitle>
+        <CardDescription>학생마다 장별로 볼 수 있는 정보를 정합니다. 이미 시작한 장은 변경할 수 없습니다.</CardDescription></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3"><Label htmlFor="info-round" className="shrink-0">설정할 장</Label>
+            <select id="info-round" value={infoRound} onChange={(event) => setSelectedInfoRound(Number(event.target.value))}
+              className="h-10 flex-1 rounded-lg border bg-card px-3 text-sm">
+              {Array.from({ length: maxRounds - firstEditableRound + 1 }, (_, index) => firstEditableRound + index)
+                .map((round) => <option key={round} value={round}>{round}장</option>)}
+            </select></div>
+          <p className="text-xs text-muted-foreground">기본값은 방을 만들 때 선택한 공개 방식입니다. 예: 기본값을 비공개로 두고 학생 1의 1장, 학생 2의 2장만 전체 공개로 설정합니다.</p>
+          {data.members?.map((member) => <div key={member.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{member.nickname}</span>
+            <Select value={overrides[member.id]?.[String(infoRound)] ?? "default"}
+              onValueChange={(informationMode) => void action({ action: "set_market_information", memberId: member.id,
+                targetRound: infoRound, informationMode })} disabled={busy}>
+              <SelectTrigger aria-label={`${member.nickname} ${infoRound}장 배당정보`} className="w-full bg-card sm:w-52"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">기본값 ({informationModeForRoom(data.room.config, data.room.experiment) === "full_distribution" ? "전체 공개" : informationModeForRoom(data.room.config, data.room.experiment) === "expected_only" ? "기대값" : "비공개"})</SelectItem>
+                <SelectItem value="full_distribution">분포 전체 공개</SelectItem>
+                <SelectItem value="expected_only">기대값만 공개</SelectItem>
+                <SelectItem value="hidden">비공개</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>)}
+          {!data.members?.length && <p className="text-sm text-muted-foreground">학생이 입장하면 이곳에서 지정할 수 있습니다.</p>}
+        </CardContent></Card>}
       {!!data.classReceipts?.length && <Card><CardHeader><CardTitle>참여자별 현금 정산</CardTitle>
         <CardDescription>체결 대금은 참가자 간 이동하고, 배당금만 전체 현금을 늘립니다.</CardDescription></CardHeader>
         <CardContent className="space-y-2">{data.classReceipts.map((item) =>
           <div key={item.memberId} className="grid grid-cols-2 gap-1 rounded-lg border p-3 text-sm sm:grid-cols-4">
             <b>{item.nickname}</b><span>거래 {signed(item.tradeCashCents)}</span>
-            <span>배당 {signed(item.dividendCashCents)}</span>
+            <span>배당 {stage === "awaiting_dividend" ? "결정 전" : signed(item.dividendCashCents)}</span>
             <b className="text-right">{money(item.endingCashCents)} · {item.endingShares}주</b>
           </div>)}</CardContent></Card>}
     </div>
@@ -90,7 +119,8 @@ export function MarketRoom({ data, action, busy }: Props) {
     <Card className="h-fit"><CardHeader><Badge className="mb-2 w-fit">{data.room.round}장 · {modeLabel}</Badge>
       <CardTitle>{infoTitle}</CardTitle><CardDescription>{infoMode === "hidden" ? "배당 결정 전에는 배당정보가 비공개입니다." : "수업방의 공개 정보를 바탕으로 판단하세요."}</CardDescription></CardHeader>
       <CardContent className="space-y-4"><div className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900"><b>현재 공개 정보</b><p>{infoDetail}</p></div>
-        {distributionPublic && <DividendTable distribution={distribution} />}
+        {distribution && <DividendTable distribution={distribution} />}
+        {["results", "complete"].includes(stage) && <p className="text-sm">확정 배당: 주당 <b>{money(data.room.dividendPaid)}</b></p>}
         <div className="grid grid-cols-2 gap-3"><Metric label="보유 현금" value={money(data.holding?.cashCents ?? 0)} />
           <Metric label="보유 주식" value={String(data.holding?.shares ?? 0) + "주"} /></div></CardContent></Card>
     <div className="space-y-5">
@@ -115,7 +145,7 @@ export function MarketRoom({ data, action, busy }: Props) {
         </CardContent></Card> : ["awaiting_dividend", "results", "complete"].includes(stage) ? <>
         {stage === "awaiting_dividend" && <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 font-semibold text-amber-950">
           거래가 체결되었습니다. 선생님의 배당 추첨을 기다립니다.</p>}
-        {data.marketReceipt && <ReceiptCard receipt={data.marketReceipt}
+        {data.marketReceipt && <ReceiptCard receipt={data.marketReceipt} nickname={data.member.nickname} round={data.room.round}
           dividendPaid={stage === "awaiting_dividend" ? null : data.room.dividendPaid} />}
       </> : <WaitCard title="선생님의 시작을 기다리는 중" description="현재 잔고와 제출 기록은 보존됩니다." />}
       <MarketOverview data={data} chart={chart} compact />
@@ -123,9 +153,9 @@ export function MarketRoom({ data, action, busy }: Props) {
   </div>;
 }
 
-function ReceiptCard({ receipt, dividendPaid }: { receipt: Receipt; dividendPaid: number | null }) {
-  return <Card><CardHeader><CardTitle>이번 장 현금 변동</CardTitle>
-    <CardDescription>체결 대금과 배당금을 따로 표시합니다. 미체결 주문은 잔고에 영향을 주지 않습니다.</CardDescription></CardHeader>
+function ReceiptCard({ receipt, dividendPaid, nickname, round }: { receipt: Receipt; dividendPaid: number | null; nickname: string; round: number }) {
+  return <Card><CardHeader><CardTitle>참여자별 현금 정산 · 내 내역</CardTitle>
+    <CardDescription>{nickname}님의 {round}장 정산입니다. 본인 내역만 보이며, 미체결 주문은 잔고에 영향을 주지 않습니다.</CardDescription></CardHeader>
     <CardContent className="space-y-3 text-sm">
       <div className="flex justify-between"><span>마감 전 현금</span><b>{money(receipt.openingCashCents)}</b></div>
       <div className="flex justify-between"><span>체결 대금 ({receipt.filledQuantity}주)</span>

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,6 +33,7 @@ type RoomConfigState = {
   informationMode: InformationMode;
   dividendDistributions: DividendDistribution[];
   activeDistributionId: string;
+  roundDistributionIds: Record<string, string>;
   rounds: number;
   secondsPerRound: number;
   initialCash: number;
@@ -311,6 +313,7 @@ function RoomStart({ type, user, onOpen }: { type: "market" | "allocation"; user
     informationMode: "full_distribution",
     dividendDistributions: DEFAULT_DIVIDEND_DISTRIBUTIONS.map((distribution) => ({ ...distribution, outcomes: distribution.outcomes.map((outcome) => ({ ...outcome })) })),
     activeDistributionId: DEFAULT_ACTIVE_DISTRIBUTION_ID,
+    roundDistributionIds: {},
     rounds: 10,
     secondsPerRound: 60,
     initialCash: 50,
@@ -318,6 +321,10 @@ function RoomStart({ type, user, onOpen }: { type: "market" | "allocation"; user
   });
   const distributionError = validateDividendDistributions(config.dividendDistributions);
   const activeDistributionValid = config.dividendDistributions.some((distribution) => distribution.id === config.activeDistributionId);
+  const roundCountValid = Number.isInteger(config.rounds) && config.rounds >= 1 && config.rounds <= 30;
+  const validDistributionIds = new Set(config.dividendDistributions.map((distribution) => distribution.id));
+  const roundAssignmentsValid = Object.entries(config.roundDistributionIds).every(([round, id]) =>
+    Number(round) >= 1 && Number(round) <= config.rounds && validDistributionIds.has(id));
   const canCreate = isTeacherRole(user.role);
   const toggle = (key: "rolePool" | "shockPool", value: string) => {
     setConfig((current) => {
@@ -326,8 +333,8 @@ function RoomStart({ type, user, onOpen }: { type: "market" | "allocation"; user
     });
   };
   const submit = async () => {
-    if (dialog === "create" && type === "market" && (distributionError || !activeDistributionValid)) {
-      setError(distributionError ?? "이번 방에서 사용할 배당확률분포를 선택해주세요.");
+    if (dialog === "create" && type === "market" && (distributionError || !roundCountValid || !activeDistributionValid || !roundAssignmentsValid)) {
+      setError(distributionError ?? (!roundCountValid ? "장 수를 1~30 사이 정수로 입력해주세요." : "장별 배당확률분포를 확인해주세요."));
       return;
     }
     const body = dialog === "create" ? { action: "create", type, title, config } : { action: "join", code, nickname };
@@ -341,7 +348,7 @@ function RoomStart({ type, user, onOpen }: { type: "market" | "allocation"; user
     : { eyebrow: "2차시 · 안전자산은 정말 안전할까?", title: "내 역할에 맞는 자산배분을 설계합니다.", steps: ["학생별 역할 무작위 배정", "100포인트 최초 배분", "선택 이유 기록"] };
   const createDisabled = type === "allocation"
     ? !config.rolePool.length || !config.shockPool.length
-    : Boolean(distributionError) || !activeDistributionValid;
+    : Boolean(distributionError) || !roundCountValid || !activeDistributionValid || !roundAssignmentsValid;
 
   return <div className="mx-auto max-w-5xl fade-up">
     <section className="overflow-hidden rounded-[28px] border bg-card shadow-xl shadow-slate-900/5">
@@ -371,18 +378,41 @@ function RoomStart({ type, user, onOpen }: { type: "market" | "allocation"; user
                 <ModeChoice value="close_public" selected={config.tradingMode} onChange={(tradingMode) => setConfig((current) => ({ ...current, tradingMode }))} label="장 마감마다 공개" detail="거래 중 비공개" />
                 <ModeChoice value="open_book" selected={config.tradingMode} onChange={(tradingMode) => setConfig((current) => ({ ...current, tradingMode }))} label="호가창 공개" detail="거래 중 실시간 공개" />
               </ChoiceGroup>
-              <ChoiceGroup title="배당정보 공개 방식" description="학생에게 보여줄 배당 관련 정보의 범위를 선택합니다.">
+              <ChoiceGroup title="배당정보 기본 공개 방식" description="학생 전체의 기본값입니다. 방을 만든 뒤 대기실에서 학생별·장별로 다르게 지정할 수 있습니다.">
                 <InfoChoice value="full_distribution" selected={config.informationMode} onChange={(informationMode) => setConfig((current) => ({ ...current, informationMode }))} label="확률분포 전체" detail="배당금과 확률 공개" />
                 <InfoChoice value="expected_only" selected={config.informationMode} onChange={(informationMode) => setConfig((current) => ({ ...current, informationMode }))} label="기대값만" detail="분포표는 비공개" />
                 <InfoChoice value="hidden" selected={config.informationMode} onChange={(informationMode) => setConfig((current) => ({ ...current, informationMode }))} label="비공개" detail="배당정보 미제공" />
               </ChoiceGroup>
-              <DividendDistributionEditor distributions={config.dividendDistributions} activeDistributionId={config.activeDistributionId} onDistributionsChange={(dividendDistributions) => setConfig((current) => ({ ...current, dividendDistributions }))} onActiveDistributionChange={(activeDistributionId) => setConfig((current) => ({ ...current, activeDistributionId }))} />
+              <DividendDistributionEditor distributions={config.dividendDistributions} activeDistributionId={config.activeDistributionId} onDistributionsChange={(dividendDistributions) => setConfig((current) => ({ ...current,
+                dividendDistributions,
+                roundDistributionIds: Object.fromEntries(Object.entries(current.roundDistributionIds).filter(([, id]) => dividendDistributions.some((item) => item.id === id))),
+              }))} onActiveDistributionChange={(activeDistributionId) => setConfig((current) => ({ ...current, activeDistributionId }))} />
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div className="space-y-2"><Label htmlFor="initial-cash">초기 현금($)</Label><Input id="initial-cash" type="number" min={0} max={1000} step={1} value={config.initialCash} onChange={(event) => setConfig({ ...config, initialCash: Number(event.target.value) })} /></div>
                 <div className="space-y-2"><Label htmlFor="initial-shares">초기 주식(주)</Label><Input id="initial-shares" type="number" min={1} max={100} step={1} value={config.initialShares} onChange={(event) => setConfig({ ...config, initialShares: Number(event.target.value) })} /></div>
-                <div className="space-y-2"><Label htmlFor="rounds">장 수</Label><Input id="rounds" type="number" min={1} max={30} value={config.rounds} onChange={(event) => setConfig({ ...config, rounds: Number(event.target.value) })} /></div>
+                <div className="space-y-2"><Label htmlFor="rounds">장 수</Label><Input id="rounds" type="number" min={1} max={30} value={config.rounds} onChange={(event) => { const rounds = Number(event.target.value); setConfig((current) => ({ ...current, rounds,
+                  roundDistributionIds: Object.fromEntries(Object.entries(current.roundDistributionIds).filter(([round]) => Number(round) <= rounds)),
+                })); }} /></div>
                 <div className="space-y-2"><Label htmlFor="seconds">장당 시간(초)</Label><Input id="seconds" type="number" min={30} max={180} value={config.secondsPerRound} onChange={(event) => setConfig({ ...config, secondsPerRound: Number(event.target.value) })} /></div>
               </div>
+              <section className="rounded-xl border p-4">
+                <h3 className="font-bold">장별 배당분포</h3>
+                <p className="mt-1 text-sm text-muted-foreground">각 장에 사용할 확률분포를 고르세요. 추첨은 해당 장에 지정한 분포를 따릅니다.</p>
+                <div className="mt-4 grid max-h-72 gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
+                  {Array.from({ length: Math.max(1, Math.min(30, Math.floor(config.rounds || 1))) }, (_, index) => {
+                    const round = String(index + 1);
+                    return <div key={round} className="flex items-center gap-3 rounded-lg bg-muted/45 p-2">
+                      <Label className="w-12 shrink-0">{round}장</Label>
+                      <Select value={config.roundDistributionIds[round] ?? config.activeDistributionId} onValueChange={(id) => setConfig((current) => ({ ...current,
+                        roundDistributionIds: { ...current.roundDistributionIds, [round]: id },
+                      }))}>
+                        <SelectTrigger aria-label={`${round}장 배당분포`} className="min-w-0 flex-1 bg-card"><SelectValue /></SelectTrigger>
+                        <SelectContent>{config.dividendDistributions.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>;
+                  })}
+                </div>
+              </section>
             </>}
           </> : <>
             <div className="space-y-2"><Label htmlFor="room-code">방 코드</Label><Input id="room-code" value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} maxLength={6} className="text-lg font-bold tracking-[0.15em]" /></div>

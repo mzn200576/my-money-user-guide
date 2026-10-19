@@ -58,11 +58,19 @@ async function handlePost(request: Request) {
       const validIds = new Set(dividendDistributions.map((distribution) => distribution.id));
       const requestedDistributionId = String(requested.activeDistributionId ?? DEFAULT_ACTIVE_DISTRIBUTION_ID);
       const activeDistributionId = validIds.has(requestedDistributionId) ? requestedDistributionId : dividendDistributions[0].id;
+      const rounds = Math.max(1, Math.min(30, Math.floor(Number(requested.rounds) || 10)));
+      const requestedRounds = requested.roundDistributionIds ?? {};
+      if (!requestedRounds || typeof requestedRounds !== "object" || Array.isArray(requestedRounds) ||
+          Object.entries(requestedRounds).some(([round, id]) =>
+            !/^[1-9]\d*$/.test(round) || Number(round) > rounds || !validIds.has(String(id)))) {
+        return Response.json({ error: "장별로 지정한 배당분포를 확인해주세요." }, { status: 400 });
+      }
+      const roundDistributionIds = Object.fromEntries(Object.entries(requestedRounds));
       const tradingMode = ["private", "close_public", "open_book"].includes(String(requested.tradingMode)) ? String(requested.tradingMode) : "close_public";
       const informationMode = ["full_distribution", "expected_only", "hidden"].includes(String(requested.informationMode)) ? String(requested.informationMode) : "full_distribution";
       const requestedInitialCash = Number(requested.initialCash);
       config = {
-        rounds: Math.max(1, Math.min(30, Number(requested.rounds) || 10)),
+        rounds,
         secondsPerRound: Math.max(30, Math.min(180, Number(requested.secondsPerRound) || 60)),
         initialCash: Number.isFinite(requestedInitialCash) ? Math.max(0, Math.min(1000, requestedInitialCash)) : 50,
         initialShares: Math.max(1, Math.min(100, Math.floor(Number(requested.initialShares) || 5))),
@@ -70,6 +78,8 @@ async function handlePost(request: Request) {
         informationMode,
         dividendDistributions,
         activeDistributionId,
+        roundDistributionIds,
+        memberInformationModes: {},
       };
     }
     await insertRows<RoomRow>("rooms", {

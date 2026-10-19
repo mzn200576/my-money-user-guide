@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addMarketDividend, marketReceipt, settleMarketOrders } from "../lib/market-settlement.ts";
-import { aggregatedDividendOutcomes, drawDividendValue } from "../lib/market.ts";
+import { aggregatedDividendOutcomes, distributionForRoom, drawDividendValue, informationModeForMember, marketConfigForMember } from "../lib/market.ts";
 
 function order(id, memberId, side, priceCents, quantity, createdAt = id) {
   return { id, memberId, side, priceCents, quantity, remaining: quantity, createdAt };
@@ -71,4 +71,50 @@ test("the wheel combines repeated amounts into sectors with their full probabili
 
 test("dividend overflow is rejected before persisting balances", () => {
   assert.throws(() => addMarketDividend([holding("one", 2_147_483_640, 5)], 2), /잔고 한도/);
+});
+
+test("every round draws from its own assigned dividend distribution", () => {
+  const config = {
+    dividendDistributions: [
+      { id: "first", name: "첫 장", outcomes: [{ value: 1, probability: 100 }] },
+      { id: "second", name: "둘째 장", outcomes: [{ value: 4, probability: 100 }] },
+    ],
+    activeDistributionId: "first",
+    roundDistributionIds: { "2": "second" },
+  };
+  assert.equal(drawDividendValue(distributionForRoom(config, 1, 1), 0.7), 1);
+  assert.equal(drawDividendValue(distributionForRoom(config, 1, 2), 0.7), 4);
+  assert.equal(drawDividendValue(distributionForRoom(config, 1, 3), 0.7), 1);
+});
+
+test("per-student, per-round information cannot reveal another round or classmate", () => {
+  const config = {
+    rounds: 2, tradingMode: "close_public", informationMode: "hidden",
+    dividendDistributions: [
+      { id: "one", name: "1장 비밀", outcomes: [{ value: 1, probability: 100 }] },
+      { id: "two", name: "2장 비밀", outcomes: [{ value: 8, probability: 100 }] },
+    ],
+    activeDistributionId: "one", roundDistributionIds: { "2": "two" },
+    memberInformationModes: {
+      student1: { "1": "full_distribution" },
+      student2: { "2": "full_distribution" },
+      student3: { "1": "expected_only" },
+    },
+  };
+  assert.equal(informationModeForMember(config, "student1", 1), "full_distribution");
+  assert.equal(informationModeForMember(config, "student1", 2), "hidden");
+  const first = marketConfigForMember(config, "student1", 1);
+  assert.deepEqual(first.dividendDistributions.map((item) => item.id), ["one"]);
+  assert.equal(JSON.stringify(first).includes("2장 비밀"), false);
+  assert.equal(JSON.stringify(first).includes("student2"), false);
+  const second = marketConfigForMember(config, "student2", 2);
+  assert.deepEqual(second.dividendDistributions.map((item) => item.id), ["two"]);
+  const hidden = marketConfigForMember(config, "student1", 2);
+  assert.equal(hidden.dividendDistributions, undefined);
+  assert.equal(hidden.expectedDividend, undefined);
+  const expected = marketConfigForMember(config, "student3", 1);
+  assert.equal(expected.expectedDividend, 1);
+  assert.equal(expected.dividendDistributions, undefined);
+  assert.equal(expected.memberInformationModes, undefined);
+  assert.equal(expected.roundDistributionIds, undefined);
 });

@@ -9,7 +9,7 @@ import type {
 } from "@/db/schema";
 import { routeError } from "@/lib/api-response";
 import { ALLOCATION_ASSETS, calculateAllocation, SHOCKS, type AllocationWeights } from "@/lib/course-data";
-import { distributionExpectedValue, distributionForRoom, drawDividendValue, informationModeForRoom, tradingModeForRoom } from "@/lib/market";
+import { distributionForRoom, drawDividendValue, marketConfigForMember, tradingModeForRoom, type InformationMode, type MemberInformationModes } from "@/lib/market";
 import { addMarketDividend, marketReceipt, settleMarketOrders } from "@/lib/market-settlement";
 import { requireAppUser } from "@/lib/server-auth";
 
@@ -32,18 +32,10 @@ async function handleGet(request: Request, context: Context) {
   const isOwner = room.ownerId === user.id;
   if (!isOwner && !member) return Response.json({ error: "먼저 방에 참여해주세요." }, { status: 403 });
   const parsedConfig = JSON.parse(room.config) as Record<string, unknown>;
-  const safeConfig = { ...parsedConfig };
+  const safeConfig = room.type === "market" && !isOwner && member
+    ? marketConfigForMember(parsedConfig, member.id, room.round, room.experiment)
+    : { ...parsedConfig };
   if (room.type === "allocation" && !isOwner && ["lobby", "allocate"].includes(room.stage)) delete safeConfig.shockPool;
-  if (room.type === "market" && !isOwner && !["results", "complete"].includes(room.stage)) {
-    const informationMode = informationModeForRoom(parsedConfig, room.experiment);
-    if (informationMode !== "full_distribution") {
-      if (informationMode === "expected_only") safeConfig.expectedDividend = distributionExpectedValue(distributionForRoom(parsedConfig, room.experiment));
-      else delete safeConfig.expectedDividend;
-      delete safeConfig.dividendDistributions;
-      delete safeConfig.activeDistributionId;
-      delete safeConfig.experimentDistributionIds;
-    }
-  }
   const safeRoom = {
     ...room,
     config: safeConfig,
@@ -133,6 +125,9 @@ async function handlePost(request: Request, context: Context) {
     side?: "buy" | "sell";
     price?: number;
     quantity?: number;
+    targetRound?: number;
+    memberId?: string;
+    informationMode?: InformationMode | "default";
   };
 
   if (body.action === "allocation_submit") {
@@ -180,6 +175,37 @@ async function handlePost(request: Request, context: Context) {
 
   if (!isOwner) return Response.json({ error: "방장 권한이 필요합니다." }, { status: 403 });
 
+  if (body.action === "set_market_information" && room.type === "market") {
+    const config = JSON.parse(room.config) as Record<string, unknown>;
+    const targetRound = body.targetRound;
+    const maximum = Math.max(1, Math.min(30, Number(config.rounds) || 10));
+    if (!Number.isInteger(targetRound) || !targetRound || targetRound < 1 || targetRound > maximum ||
+        (room.stage !== "lobby" && targetRound <= room.round) || room.status === "complete") {
+      return Response.json({ error: "시작 전이거나 아직 열리지 않은 장의 정보만 설정할 수 있습니다." }, { status: 409 });
+    }
+    if (body.informationMode !== "default" && body.informationMode !== "full_distribution" &&
+        body.informationMode !== "expected_only" && body.informationMode !== "hidden") {
+      return Response.json({ error: "정보 공개 방식을 선택해주세요." }, { status: 400 });
+    }
+    const [target] = await selectRows<RoomMemberRow>("room_members", {
+      filters: { id: eqFilter(body.memberId ?? ""), roomId: eqFilter(room.id) }, limit: 1,
+    });
+    if (!target) return Response.json({ error: "이 방의 참여자를 선택해주세요." }, { status: 404 });
+    const assignments = config.memberInformationModes && typeof config.memberInformationModes === "object"
+      ? config.memberInformationModes as MemberInformationModes : {};
+    const memberRounds = { ...(assignments[target.id] ?? {}) };
+    if (body.informationMode === "default") delete memberRounds[String(targetRound)];
+    else memberRounds[String(targetRound)] = body.informationMode;
+    if (!Object.keys(memberRounds).length) delete assignments[target.id];
+    else assignments[target.id] = memberRounds;
+    config.memberInformationModes = assignments;
+    const updated = await updateRows<RoomRow>("rooms", {
+      config: JSON.stringify(config), version: room.version + 1, updatedAt: new Date().toISOString(),
+    }, { id: eqFilter(room.id), stage: eqFilter(room.stage), version: eqFilter(room.version) }, true);
+    if (!updated.length) return Response.json({ error: "방 상태가 바뀌었습니다. 새로고침 후 다시 설정해주세요." }, { status: 409 });
+    return Response.json({ ok: true });
+  }
+
   if (body.action === "start") {
     if (room.stage !== "lobby") return Response.json({ error: "이미 수업이 시작되었습니다." }, { status: 409 });
     const config = JSON.parse(room.config) as { secondsPerRound?: number };
@@ -216,7 +242,7 @@ async function handlePost(request: Request, context: Context) {
     }
     const marketConfig = JSON.parse(room.config) as Record<string, unknown>;
     const dividendCents = delayedDividend ? -1 :
-      Math.round(drawDividendValue(distributionForRoom(marketConfig, room.experiment), randomUnit()) * 100);
+      Math.round(drawDividendValue(distributionForRoom(marketConfig, room.experiment, room.round), randomUnit()) * 100);
     const finalHoldings = delayedDividend ? settlement.holdings : addMarketDividend(settlement.holdings, dividendCents);
     await applyMarketClose({
       pRoomId: room.id,
@@ -235,7 +261,7 @@ async function handlePost(request: Request, context: Context) {
   }
   if (body.action === "decide_dividend" && room.type === "market") {
     if (room.stage !== "awaiting_dividend") return Response.json({ error: "먼저 장을 마감해주세요." }, { status: 409 });
-    const distribution = distributionForRoom(JSON.parse(room.config) as Record<string, unknown>, room.experiment);
+    const distribution = distributionForRoom(JSON.parse(room.config) as Record<string, unknown>, room.experiment, room.round);
     const dividendCents = Math.round(drawDividendValue(distribution, randomUnit()) * 100);
     await decideMarketDividend({
       pRoomId: room.id, pExperiment: room.experiment, pRound: room.round,

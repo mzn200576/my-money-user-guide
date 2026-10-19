@@ -11,6 +11,7 @@ export type DividendDistribution = {
 
 export type TradingMode = "private" | "close_public" | "open_book";
 export type InformationMode = "full_distribution" | "expected_only" | "hidden";
+export type MemberInformationModes = Record<string, Record<string, InformationMode>>;
 
 export const DEFAULT_DIVIDEND_DISTRIBUTIONS: DividendDistribution[] = [
   {
@@ -101,8 +102,12 @@ export function distributionsFromConfig(config: Record<string, unknown>) {
   }));
 }
 
-export function distributionForRoom(config: Record<string, unknown>, experiment = 1) {
+export function distributionForRoom(config: Record<string, unknown>, experiment = 1, round = 1) {
   const distributions = distributionsFromConfig(config);
+  const roundAssignments = config.roundDistributionIds && typeof config.roundDistributionIds === "object"
+    ? config.roundDistributionIds as Record<string, unknown> : {};
+  const roundId = String(roundAssignments[String(round)] ?? "");
+  if (roundId) return distributions.find((distribution) => distribution.id === roundId) ?? distributions[0];
   const activeId = String(config.activeDistributionId ?? "");
   if (activeId) return distributions.find((distribution) => distribution.id === activeId) ?? distributions[0];
   const assignments = config.experimentDistributionIds && typeof config.experimentDistributionIds === "object"
@@ -125,6 +130,36 @@ export function informationModeForRoom(config: Record<string, unknown>, legacyEx
   }
   if (legacyExperiment === 1) return "full_distribution";
   return legacyExperiment === 2 ? "expected_only" : "hidden";
+}
+
+export function informationModeForMember(config: Record<string, unknown>, memberId: string, round: number, experiment = 1): InformationMode {
+  const assignments = config.memberInformationModes;
+  if (assignments && typeof assignments === "object" && !Array.isArray(assignments)) {
+    const memberRounds = (assignments as Record<string, unknown>)[memberId];
+    if (memberRounds && typeof memberRounds === "object" && !Array.isArray(memberRounds)) {
+      const assigned = (memberRounds as Record<string, unknown>)[String(round)];
+      if (assigned === "full_distribution" || assigned === "expected_only" || assigned === "hidden") return assigned;
+    }
+  }
+  return informationModeForRoom(config, experiment);
+}
+
+// Never send the other rounds' distributions or classmates' assignments to a student.
+export function marketConfigForMember(config: Record<string, unknown>, memberId: string, round: number, experiment = 1) {
+  const mode = informationModeForMember(config, memberId, round, experiment);
+  const safe: Record<string, unknown> = {
+    rounds: config.rounds,
+    tradingMode: tradingModeForRoom(config, experiment),
+    informationMode: mode,
+  };
+  const distribution = distributionForRoom(config, experiment, round);
+  if (mode === "full_distribution") {
+    safe.dividendDistributions = [distribution];
+    safe.activeDistributionId = distribution.id;
+  } else if (mode === "expected_only") {
+    safe.expectedDividend = distributionExpectedValue(distribution);
+  }
+  return safe;
 }
 
 export function drawDividendValue(distribution: DividendDistribution, random: number) {

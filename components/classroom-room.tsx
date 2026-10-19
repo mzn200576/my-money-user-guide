@@ -105,7 +105,8 @@ export function ClassroomRoom({ code, onExit }: { code: string; user: User; onEx
       {data.room.type === "allocation" ? <AllocationRoom data={data} action={action} busy={busy} /> : <MarketRoom data={data} action={action} busy={busy} />}
       {data.room.type === "market" && data.room.stage === "results" && data.room.stageEndsAt &&
         <DividendWheel key={`${data.room.id}-${data.room.round}-${data.room.stageEndsAt}`}
-          distribution={distributionForRoom(data.room.config, data.room.experiment)}
+          distribution={data.isOwner || data.room.config.informationMode === "full_distribution"
+            ? distributionForRoom(data.room.config, data.room.experiment, data.room.round) : null}
           dividendCents={data.room.dividendPaid} deadline={data.room.stageEndsAt} />}
     </div>
   );
