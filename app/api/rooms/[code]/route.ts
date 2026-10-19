@@ -9,7 +9,7 @@ import type {
 } from "@/db/schema";
 import { routeError } from "@/lib/api-response";
 import { ALLOCATION_ASSETS, calculateAllocation, SHOCKS, type AllocationWeights } from "@/lib/course-data";
-import { distributionForRoom, drawDividendValue, marketConfigForMember, tradingModeForRoom, type InformationMode, type MemberInformationModes } from "@/lib/market";
+import { distributionForRoom, distributionsFromConfig, drawDividendValue, marketConfigForMember, tradingModeForRoom, type InformationMode, type MemberInformationModes } from "@/lib/market";
 import { addMarketDividend, marketReceipt, settleMarketOrders } from "@/lib/market-settlement";
 import { requireAppUser } from "@/lib/server-auth";
 
@@ -110,6 +110,12 @@ function randomUnit() {
   return crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
 }
 
+function canEditMarketRound(room: RoomRow, config: Record<string, unknown>, targetRound: number | undefined) {
+  const maximum = Math.max(1, Math.min(30, Number(config.rounds) || 10));
+  return Number.isInteger(targetRound) && !!targetRound && targetRound >= 1 && targetRound <= maximum &&
+    room.status !== "complete" && (room.stage === "lobby" || targetRound > room.round);
+}
+
 async function handlePost(request: Request, context: Context) {
   const user = await requireAppUser(request);
   const { code } = await context.params;
@@ -128,6 +134,7 @@ async function handlePost(request: Request, context: Context) {
     targetRound?: number;
     memberId?: string;
     informationMode?: InformationMode | "default";
+    distributionId?: string;
   };
 
   if (body.action === "allocation_submit") {
@@ -175,12 +182,30 @@ async function handlePost(request: Request, context: Context) {
 
   if (!isOwner) return Response.json({ error: "방장 권한이 필요합니다." }, { status: 403 });
 
+  if (body.action === "set_market_round_distribution" && room.type === "market") {
+    const config = JSON.parse(room.config) as Record<string, unknown>;
+    if (!canEditMarketRound(room, config, body.targetRound)) {
+      return Response.json({ error: "시작 전이거나 아직 열리지 않은 장의 분포만 설정할 수 있습니다." }, { status: 409 });
+    }
+    const ids = new Set(distributionsFromConfig(config).map((distribution) => distribution.id));
+    if (body.distributionId !== "default" && !ids.has(body.distributionId ?? "")) {
+      return Response.json({ error: "이 방에 저장된 배당분포를 선택해주세요." }, { status: 400 });
+    }
+    const assignments = { ...(config.roundDistributionIds as Record<string, string> | undefined ?? {}) };
+    if (body.distributionId === "default") delete assignments[String(body.targetRound)];
+    else assignments[String(body.targetRound)] = body.distributionId!;
+    config.roundDistributionIds = assignments;
+    const updated = await updateRows<RoomRow>("rooms", {
+      config: JSON.stringify(config), version: room.version + 1, updatedAt: new Date().toISOString(),
+    }, { id: eqFilter(room.id), stage: eqFilter(room.stage), version: eqFilter(room.version) }, true);
+    if (!updated.length) return Response.json({ error: "방 상태가 바뀌었습니다. 새로고침 후 다시 설정해주세요." }, { status: 409 });
+    return Response.json({ ok: true });
+  }
+
   if (body.action === "set_market_information" && room.type === "market") {
     const config = JSON.parse(room.config) as Record<string, unknown>;
     const targetRound = body.targetRound;
-    const maximum = Math.max(1, Math.min(30, Number(config.rounds) || 10));
-    if (!Number.isInteger(targetRound) || !targetRound || targetRound < 1 || targetRound > maximum ||
-        (room.stage !== "lobby" && targetRound <= room.round) || room.status === "complete") {
+    if (!canEditMarketRound(room, config, targetRound)) {
       return Response.json({ error: "시작 전이거나 아직 열리지 않은 장의 정보만 설정할 수 있습니다." }, { status: 409 });
     }
     if (body.informationMode !== "default" && body.informationMode !== "full_distribution" &&

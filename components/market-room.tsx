@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { distributionExpectedValue, distributionForRoom, informationModeForRoom, tradingModeForRoom, type DividendDistribution, type MemberInformationModes } from "@/lib/market";
+import { distributionExpectedValue, distributionForRoom, distributionsFromConfig, informationModeForRoom, tradingModeForRoom, type DividendDistribution, type MemberInformationModes } from "@/lib/market";
 
 type Props = { data: RoomData; action: (body: Record<string, unknown>) => Promise<void>; busy: boolean };
 type Receipt = NonNullable<RoomData["marketReceipt"]>;
@@ -38,6 +38,7 @@ export function MarketRoom({ data, action, busy }: Props) {
   const firstEditableRound = stage === "lobby" ? 1 : data.room.round + 1;
   const infoRound = Math.max(firstEditableRound, selectedInfoRound);
   const overrides = (data.room.config.memberInformationModes ?? {}) as MemberInformationModes;
+  const roundDistributions = (data.room.config.roundDistributionIds ?? {}) as Record<string, string>;
   const chart = useMemo(() => {
     const groups = new Map<number, { round: number; total: number; quantity: number }>();
     for (const trade of data.trades ?? []) {
@@ -76,8 +77,8 @@ export function MarketRoom({ data, action, busy }: Props) {
           {stage === "results" && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
             이번 장 배당: <b>주당 {money(data.room.dividendPaid)}</b></div>}
         </CardContent></Card>
-      {firstEditableRound <= maxRounds && stage !== "complete" && <Card><CardHeader><CardTitle>학생별 배당 정보 공개</CardTitle>
-        <CardDescription>학생마다 장별로 볼 수 있는 정보를 정합니다. 이미 시작한 장은 변경할 수 없습니다.</CardDescription></CardHeader>
+      {firstEditableRound <= maxRounds && stage !== "complete" && <Card><CardHeader><CardTitle>장별 배당분포·정보 공개</CardTitle>
+        <CardDescription>장별 분포와 학생마다 볼 수 있는 정보를 정합니다. 이미 시작한 장은 변경할 수 없습니다.</CardDescription></CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-3"><Label htmlFor="info-round" className="shrink-0">설정할 장</Label>
             <select id="info-round" value={infoRound} onChange={(event) => setSelectedInfoRound(Number(event.target.value))}
@@ -85,6 +86,17 @@ export function MarketRoom({ data, action, busy }: Props) {
               {Array.from({ length: maxRounds - firstEditableRound + 1 }, (_, index) => firstEditableRound + index)
                 .map((round) => <option key={round} value={round}>{round}장</option>)}
             </select></div>
+          <div className="space-y-2 rounded-lg bg-muted/40 p-3"><Label>{infoRound}장 배당분포</Label>
+            <Select value={roundDistributions[String(infoRound)] ?? "default"}
+              onValueChange={(distributionId) => void action({ action: "set_market_round_distribution", targetRound: infoRound,
+                distributionId })} disabled={busy}>
+              <SelectTrigger aria-label={`${infoRound}장 배당분포 변경`} className="w-full bg-card"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="default">기본 분포</SelectItem>
+                {distributionsFromConfig(data.room.config).map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <h4 className="border-t pt-3 text-sm font-bold">{infoRound}장 학생별 공개 범위</h4>
           <p className="text-xs text-muted-foreground">기본값은 방을 만들 때 선택한 공개 방식입니다. 예: 기본값을 비공개로 두고 학생 1의 1장, 학생 2의 2장만 전체 공개로 설정합니다.</p>
           {data.members?.map((member) => <div key={member.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center">
             <span className="min-w-0 flex-1 truncate text-sm font-semibold">{member.nickname}</span>
